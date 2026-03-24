@@ -25,8 +25,8 @@ git commit -m "Initial commit - testphoneapp con Sincronización Web-Móvil"
 # 5. Cambiar el branch principal a 'main'
 git branch -M main
 
-# 6. Conectar con tu nuevo repositorio vacío en GitHub/GitLab (Cambia la URL por la tuya)
-git remote add origin https://github.com/tu-usuario/testphoneapp.git
+# 6. Conectar con tu nuevo repositorio en GitHub
+git remote add origin https://github.com/betzalal/tiendarey.git
 
 # 7. Subir el código
 git push -u origin main
@@ -50,8 +50,8 @@ Dentro del servidor VPS:
 
 ```bash
 # 1. Clonar el repositorio que acabas de subir
-git clone https://github.com/tu-usuario/testphoneapp.git
-cd testphoneapp
+git clone https://github.com/betzalal/tiendarey.git
+cd tiendarey
 
 # 2. Instalar dependencias del servidor
 cd server
@@ -68,4 +68,4 @@ pm2 save
 ```
 
 ### ¿Cómo funciona en el VPS?
-He configurado `server/index.js` para que automáticamente detecte la carpeta `client/dist` (El FrontEnd compilado). Al entrar a `http://144.91.118.73`, Express te entregará tu interfaz React mágicamente unificada en el puerto 80. ¡Ahora la Nube Web opera sola bajo ese servidor!
+He configurado `server/index.js` para que automáticamente detecte la carpeta `client/dist` (El FrontEnd compilado). Al entrar a `http://144.91.118.73:3002`, Express te entregará tu interfaz React mágicamente unificada en el puerto 3002. ¡Ahora la Nube Web opera sola bajo ese servidor!

@@ -6,7 +6,7 @@ module.exports = {
       cwd: './',
       env: {
         NODE_ENV: 'production',
-        PORT: 80 // Puerto por defecto para web en VPS (requiere sudo authbindings)
+        PORT: 3002
       }
     }
   ]

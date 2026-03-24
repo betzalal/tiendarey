@@ -65,6 +65,27 @@ app.get('/api/system/status', (req, res) => {
     }
 });
 
+// Endpoint para Factory Reset (Borrar todo y empezar de cero)
+app.post('/api/system/factory-reset', (req, res) => {
+    try {
+        const dbPath = path.resolve(__dirname, 'sawalife.db');
+        try { db.close(); } catch(e) {}
+        
+        if (fs.existsSync(dbPath)) {
+            fs.unlinkSync(dbPath);
+        }
+        
+        delete require.cache[require.resolve('./db')];
+        db = require('./db');
+        
+        res.json({ success: true, message: 'Base de datos formateada' });
+    } catch (e) {
+        console.error('Factory Reset Error:', e);
+        res.status(500).json({ error: 'Error al formatear la app' });
+    }
+});
+
+
 // ==========================================
 // DB SYNC ENDPOINTS (APP EMISORA)
 // ==========================================

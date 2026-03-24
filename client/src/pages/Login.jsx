@@ -27,6 +27,17 @@ const Login = () => {
         }
     };
 
+    const handleFactoryReset = async () => {
+        if (window.confirm("¿ESTÁS SEGURO? Esta acción borrará permanentemente todas las ventas, inventario y usuarios para crear una empresa desde cero.")) {
+            try {
+                await axios.post('/system/factory-reset');
+                window.location.reload(); // Recarga la UI para detectar que DB está vacía e ir a Setup
+            } catch (e) {
+                alert("Error al reiniciar la app.");
+            }
+        }
+    };
+
     return (
         <div style={{
             height: '100vh',
@@ -69,6 +80,10 @@ const Login = () => {
 
                     <button type="submit" className="btn-primary" style={{ width: '100%' }}>
                         Entrar
+                    </button>
+                    
+                    <button type="button" onClick={handleFactoryReset} style={{ width: '100%', marginTop: '15px', background: 'transparent', color: '#666', border: '1px solid #ccc', padding: '10px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>
+                        + Crear Nueva Empresa (Empezar de Cero)
                     </button>
                 </form>
             </div>
