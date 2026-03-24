@@ -68,20 +68,19 @@ app.get('/api/system/status', (req, res) => {
 // Endpoint para Factory Reset (Borrar todo y empezar de cero)
 app.post('/api/system/factory-reset', (req, res) => {
     try {
-        const dbPath = path.resolve(__dirname, 'sawalife.db');
-        try { db.close(); } catch(e) {}
+        // En lugar de borrar el archivo e invocar bugs de File System (EBUSY/EPERM), limpiamos las tablas lógicamente
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
         
-        if (fs.existsSync(dbPath)) {
-            fs.unlinkSync(dbPath);
-        }
-        
-        delete require.cache[require.resolve('./db')];
-        db = require('./db');
+        db.transaction(() => {
+            for (const table of tables) {
+                db.prepare(`DELETE FROM ${table.name}`).run();
+            }
+        })();
         
         res.json({ success: true, message: 'Base de datos formateada' });
     } catch (e) {
         console.error('Factory Reset Error:', e);
-        res.status(500).json({ error: 'Error al formatear la app' });
+        res.status(500).json({ error: 'Error al formatear. SO Msg: ' + e.message });
     }
 });
 
@@ -642,8 +641,8 @@ if (fs.existsSync(clientDist)) {
     app.use(express.static(clientDist));
     
     // Fallback de React Router (excepto para rutas de API o Uploads)
-    app.get('*', (req, res, next) => {
-        if (req.url.startsWith('/api/') || req.url.startsWith('/uploads/')) {
+    app.use((req, res, next) => {
+        if (req.method !== 'GET' || req.originalUrl.startsWith('/api/') || req.originalUrl.startsWith('/uploads/')) {
             return next();
         }
         res.sendFile(path.join(clientDist, 'index.html'));
