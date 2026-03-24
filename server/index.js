@@ -5,7 +5,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
-const db = require('./db');
+let db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +54,144 @@ const verifyAdmin = (req, res, next) => {
         return res.status(401).json({ error: 'Invalid token' });
     }
 };
+
+// System Status and Setup
+app.get('/api/system/status', (req, res) => {
+    try {
+        const userCount = db.prepare('SELECT count(*) as count FROM users').get();
+        res.json({ isSetupComplete: userCount.count > 0 });
+    } catch (e) {
+        res.status(500).json({ error: 'DB Error' });
+    }
+});
+
+// ==========================================
+// DB SYNC ENDPOINTS (APP EMISORA)
+// ==========================================
+
+app.post('/api/system/sync-upload-to-cloud', async (req, res) => {
+    const { ip, port, session_id, force } = req.body;
+    if (!ip || !session_id) return res.status(400).json({ error: 'Missing sync data' });
+
+    try {
+        const dbPath = path.resolve(__dirname, 'sawalife.db');
+        const dbBuffer = fs.readFileSync(dbPath);
+        
+        const portStr = port && port !== '443' && port !== 443 ? ':' + port : '';
+        const url = `https://${ip}${portStr}/api/system/sync-upload?session_id=${session_id}${force ? '&force=true' : ''}`;
+        
+        const axios = require('axios');
+        const response = await axios.post(url, dbBuffer, {
+            headers: { 'Content-Type': 'application/octet-stream' }
+        });
+        
+        res.json({ success: true, data: response.data });
+    } catch (e) {
+        console.error('Cloud upload error:', e.message);
+        if (e.response && e.response.status) {
+            return res.status(e.response.status).json(e.response.data);
+        }
+        res.status(500).json({ error: 'Error al subir la base de datos a la nube' });
+    }
+});
+
+app.post('/api/system/sync-download-from-cloud', async (req, res) => {
+    const { ip, port, session_id, resume } = req.body;
+    if (!ip || !session_id) return res.status(400).json({ error: 'Missing sync data' });
+
+    try {
+        const portStr = port && port !== '443' && port !== 443 ? ':' + port : '';
+        const url = `https://${ip}${portStr}/api/system/sync-download?session_id=${session_id}${resume ? '&resume=true' : ''}`;
+        
+        const axios = require('axios');
+        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        
+        const dbPath = path.resolve(__dirname, 'sawalife.db');
+        
+        // 1. Cerrar conexión local para soltar candado del OS (Evitar EBUSY en Windows)
+        try { db.close(); console.log("DB local cerrada temporalmente para actualización"); } catch(e) { console.error(e); }
+        
+        // 2. Sobrescribir y aplastar inmediatamente el .db local
+        fs.writeFileSync(dbPath, response.data);
+        
+        // 3. Reactivar la base de datos limpiando la caché de los módulos de Node
+        delete require.cache[require.resolve('./db')];
+        db = require('./db');
+        
+        res.json({ success: true, message: 'Base de datos restaurada con éxito.' });
+    } catch (e) {
+        console.error('Cloud download error:', e.message);
+        if (e.response && e.response.status) {
+            return res.status(e.response.status).json({ error: 'No se pudo descargar de la nube' });
+        }
+        res.status(500).json({ error: 'Error en la descarga' });
+    }
+});
+
+app.post('/api/system/setup', (req, res) => {
+    const { companyName, tagline, logoData, username, password } = req.body;
+    if (!username || !password || !companyName) {
+        return res.status(400).json({ error: 'Faltan campos obligatorios (Nombre, Usuario, Contraseña).' });
+    }
+
+    try {
+        const userCount = db.prepare('SELECT count(*) as count FROM users').get();
+        if (userCount.count > 0) {
+            return res.status(403).json({ error: 'System already setup' });
+        }
+
+        db.transaction(() => {
+            const setConfig = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+            setConfig.run('companyName', companyName);
+            setConfig.run('companyTagline', tagline || '');
+
+            let logoUrl = '/assets/logo.jpg';
+            if (logoData && typeof logoData === 'string' && logoData.startsWith('data:image/')) {
+                const matches = logoData.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/);
+                if (matches && matches.length === 3) {
+                    const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+                    const buffer = Buffer.from(matches[2], 'base64');
+                    const safeName = require('crypto').randomBytes(8).toString('hex');
+                    const filename = `logo_${safeName}.${ext}`;
+                    fs.writeFileSync(path.join(uploadDir, filename), buffer);
+                    logoUrl = `/uploads/${filename}`;
+                }
+            }
+            setConfig.run('logoUrl', logoUrl);
+
+            const storeInfo = db.prepare('INSERT INTO stores (name, location, type) VALUES (?, ?, ?)').run('Tienda Principal', 'Central', 'Matriz');
+            const storeId = storeInfo.lastInsertRowid;
+
+            const hash = bcrypt.hashSync(password, 10);
+            db.prepare('INSERT INTO users (username, password, role, store_id) VALUES (?, ?, ?, ?)').run(username, hash, 'admin', storeId);
+        })();
+
+        const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+        const token = jwt.sign({ id: user.id, role: user.role, store_id: user.store_id }, SECRET_KEY, { expiresIn: '12h' });
+        
+        res.json({ success: true, token, user: { id: user.id, username: user.username, role: user.role, store_id: user.store_id } });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: 'Failed during setup' });
+    }
+});
+
+app.get('/api/system/company', (req, res) => {
+    try {
+        const getSetting = (key, defaultVal) => {
+            const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+            return row ? row.value : defaultVal;
+        };
+
+        res.json({
+            name: getSetting('companyName', 'SAWALIFE'),
+            tagline: getSetting('companyTagline', 'Filtros purificadores de agua'),
+            logoUrl: getSetting('logoUrl', '/assets/logo.jpg')
+        });
+    } catch (e) {
+        res.json({ name: 'SAWALIFE', tagline: 'Filtros purificadores de agua', logoUrl: '/assets/logo.jpg' });
+    }
+});
 
 // Auth Routes
 app.post('/api/login', (req, res) => {
@@ -376,7 +514,39 @@ app.delete('/api/sales/:id', verifyAdmin, (req, res) => {
     }
 });
 
-// Quotations
+// Quotation Templates
+app.get('/api/quotations/templates', (req, res) => {
+    try {
+        const templates = db.prepare('SELECT * FROM quote_item_templates').all();
+        res.json(templates);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to fetch templates' });
+    }
+});
+
+app.post('/api/quotations/templates', (req, res) => {
+    const { label, description } = req.body;
+    try {
+        const info = db.prepare('INSERT INTO quote_item_templates (label, description) VALUES (?, ?)').run(label, description);
+        res.json({ id: info.lastInsertRowid, label, description });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to save template' });
+    }
+});
+
+app.delete('/api/quotations/templates/:id', (req, res) => {
+    const { id } = req.params;
+    try {
+        db.prepare('DELETE FROM quote_item_templates WHERE id = ?').run(id);
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to delete template' });
+    }
+});
+
 // Quotations
 app.get('/api/quotations/next-number', (req, res) => {
     try {
@@ -445,6 +615,19 @@ app.get('/api/quotations', (req, res) => {
         res.status(500).json({ error: 'Failed to fetch quotations' });
     }
 });
+const clientDist = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDist)) {
+    // Servir archivos estáticos del build de React
+    app.use(express.static(clientDist));
+    
+    // Fallback de React Router (excepto para rutas de API o Uploads)
+    app.get('*', (req, res, next) => {
+        if (req.url.startsWith('/api/') || req.url.startsWith('/uploads/')) {
+            return next();
+        }
+        res.sendFile(path.join(clientDist, 'index.html'));
+    });
+}
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
